@@ -1,26 +1,9 @@
 "use client";
 
-import { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import FilterPanel, { Filters, emptyFilters } from "@/components/FilterPanel";
-import SortSelect, { SortOption } from "@/components/SortSelect";
+import SortSelect, { type SortOption } from "@/components/SortSelect";
 import CardGrid, { PokemonCard } from "@/components/CardGrid";
-
-const RARITY_ORDER: Record<string, number> = {
-  Common: 0,
-  Uncommon: 1,
-  Rare: 2,
-  "Rare Holo": 3,
-  "Rare Holo EX": 4,
-  "Rare Holo GX": 5,
-  "Rare Holo V": 6,
-  "Rare Ultra": 7,
-  "Rare Rainbow": 8,
-  "Rare Secret": 9,
-  "Rare Shiny": 10,
-  "Rare Shining": 11,
-  LEGEND: 12,
-  "Amazing Rare": 13,
-};
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function parseCard(card: any): PokemonCard {
@@ -56,45 +39,6 @@ function parseCard(card: any): PokemonCard {
   };
 }
 
-function sortCards(cards: PokemonCard[], sort: SortOption): PokemonCard[] {
-  const sorted = [...cards];
-  switch (sort) {
-    case "price-high":
-      return sorted.sort((a, b) => b.price - a.price);
-    case "price-low":
-      return sorted.sort(
-        (a, b) => (a.price || 9999999) - (b.price || 9999999)
-      );
-    case "release-new":
-      return sorted.sort((a, b) => b.setRelease.localeCompare(a.setRelease));
-    case "release-old":
-      return sorted.sort((a, b) => a.setRelease.localeCompare(b.setRelease));
-    case "hp-high":
-      return sorted.sort(
-        (a, b) => (parseInt(b.hp) || 0) - (parseInt(a.hp) || 0)
-      );
-    case "hp-low":
-      return sorted.sort(
-        (a, b) => (parseInt(a.hp) || 9999) - (parseInt(b.hp) || 9999)
-      );
-    case "rarity":
-      return sorted.sort(
-        (a, b) =>
-          (RARITY_ORDER[b.rarity] ?? -1) - (RARITY_ORDER[a.rarity] ?? -1)
-      );
-    case "name-az":
-      return sorted.sort((a, b) => a.name.localeCompare(b.name));
-    case "name-za":
-      return sorted.sort((a, b) => b.name.localeCompare(a.name));
-    case "number":
-      return sorted.sort(
-        (a, b) => (parseInt(a.number) || 9999) - (parseInt(b.number) || 9999)
-      );
-    default:
-      return sorted;
-  }
-}
-
 function buildSearchParams(filters: Filters): string {
   const params = new URLSearchParams();
   if (filters.name) params.set("name", filters.name);
@@ -119,12 +63,11 @@ export default function Home() {
   const [hasMore, setHasMore] = useState(false);
   const searchIdRef = useRef(0);
   const activeFiltersRef = useRef("");
+  const activeSortRef = useRef<SortOption>("price-high");
   const sentinelRef = useRef<HTMLDivElement>(null);
 
-  const sortedCards = useMemo(() => sortCards(cards, sort), [cards, sort]);
-
   const fetchCards = useCallback(
-    async (filterParams: string, page: number, append: boolean, searchId: number) => {
+    async (filterParams: string, sortKey: SortOption, page: number, append: boolean, searchId: number) => {
       if (page === 1) {
         setLoading(true);
       } else {
@@ -134,7 +77,7 @@ export default function Home() {
       try {
         const sep = filterParams ? `${filterParams}&` : "";
         const res = await fetch(
-          `/api/search?${sep}page=${page}&pageSize=100`
+          `/api/search?${sep}sort=${sortKey}&page=${page}&pageSize=100`
         );
         const data = await res.json();
         const parsed = (data.data || []).map(parseCard);
@@ -157,13 +100,22 @@ export default function Home() {
     []
   );
 
-  function handleSearch() {
+  function handleSearch(sortOverride?: SortOption) {
     const id = ++searchIdRef.current;
     const filterParams = buildSearchParams(filters);
+    const sortKey = sortOverride || sort;
     activeFiltersRef.current = filterParams;
+    activeSortRef.current = sortKey;
     setHasSearched(true);
     setCards([]);
-    fetchCards(filterParams, 1, false, id);
+    fetchCards(filterParams, sortKey, 1, false, id);
+  }
+
+  function handleSortChange(newSort: SortOption) {
+    setSort(newSort);
+    if (hasSearched) {
+      handleSearch(newSort);
+    }
   }
 
   // Infinite scroll observer
@@ -176,6 +128,7 @@ export default function Home() {
         if (entries[0].isIntersecting && hasMore && !loading && !loadingMore) {
           fetchCards(
             activeFiltersRef.current,
+            activeSortRef.current,
             currentPage + 1,
             true,
             searchIdRef.current
@@ -212,7 +165,7 @@ export default function Home() {
             </h1>
             <div className="flex items-center gap-2">
               <span className="text-xs text-gray-500">Sort:</span>
-              <SortSelect value={sort} onChange={setSort} />
+              <SortSelect value={sort} onChange={handleSortChange} />
             </div>
           </div>
           <FilterPanel
@@ -237,7 +190,7 @@ export default function Home() {
               more. Or browse everything at once.
             </p>
             <button
-              onClick={handleSearch}
+              onClick={() => handleSearch()}
               className="px-6 py-3 rounded-xl bg-[#e63946] hover:bg-[#ff6b6b] text-white font-semibold transition cursor-pointer"
             >
               Browse All Cards
@@ -280,8 +233,8 @@ export default function Home() {
           </div>
         )}
 
-        {!loading && sortedCards.length > 0 && (
-          <CardGrid cards={sortedCards} />
+        {!loading && cards.length > 0 && (
+          <CardGrid cards={cards} />
         )}
 
         {/* Infinite scroll sentinel */}

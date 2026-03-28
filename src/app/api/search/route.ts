@@ -1,9 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 
+const ORDER_MAP: Record<string, string> = {
+  "price-high": "-tcgplayer.prices.holofoil.market",
+  "price-low": "tcgplayer.prices.holofoil.market",
+  "release-new": "-set.releaseDate",
+  "release-old": "set.releaseDate",
+  "hp-high": "-hp",
+  "hp-low": "hp",
+  "name-az": "name",
+  "name-za": "-name",
+  "number": "number",
+  "rarity": "-rarity",
+};
+
 export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams;
   const page = params.get("page") || "1";
   const pageSize = params.get("pageSize") || "100";
+  const sort = params.get("sort") || "release-new";
 
   const queryParts: string[] = [];
 
@@ -28,8 +42,9 @@ export async function GET(request: NextRequest) {
   else if (hpMin) queryParts.push(`hp:[${hpMin} TO *]`);
   else if (hpMax) queryParts.push(`hp:[* TO ${hpMax}]`);
 
+  const orderBy = ORDER_MAP[sort] || "-set.releaseDate";
   const queryStr = queryParts.length > 0 ? `q=${encodeURIComponent(queryParts.join(" "))}&` : "";
-  const url = `https://api.pokemontcg.io/v2/cards?${queryStr}orderBy=-set.releaseDate&page=${page}&pageSize=${pageSize}`;
+  const url = `https://api.pokemontcg.io/v2/cards?${queryStr}orderBy=${orderBy}&page=${page}&pageSize=${pageSize}`;
   const res = await fetch(url);
   const data = await res.json();
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 
 export interface Filters {
   name: string;
@@ -51,12 +51,31 @@ const RARITIES = [
 export default function FilterPanel({ filters, onChange, onSearch, loading }: FilterPanelProps) {
   const [sets, setSets] = useState<SetInfo[]>([]);
   const [isOpen, setIsOpen] = useState(false);
+  const [pokemonNames, setPokemonNames] = useState<string[]>([]);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [selectedIndex, setSelectedIndex] = useState(-1);
+  const nameRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetch("/api/sets")
       .then((res) => res.json())
       .then(setSets)
       .catch(() => {});
+    fetch("/api/pokemon-names")
+      .then((res) => res.json())
+      .then(setPokemonNames)
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (nameRef.current && !nameRef.current.contains(e.target as Node)) {
+        setShowSuggestions(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
   function update(key: keyof Filters, value: string) {
@@ -93,16 +112,68 @@ export default function FilterPanel({ filters, onChange, onSearch, loading }: Fi
       <div className={`${isOpen ? "block" : "hidden"} sm:block`}>
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-3 items-end">
           {/* Pokemon Name */}
-          <div>
+          <div ref={nameRef} className="relative">
             <label className="block text-xs text-gray-500 mb-1">Name</label>
             <input
               type="text"
               value={filters.name}
-              onChange={(e) => update("name", e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && onSearch()}
+              onChange={(e) => {
+                const val = e.target.value;
+                update("name", val);
+                setSelectedIndex(-1);
+                if (val.length >= 1 && pokemonNames.length > 0) {
+                  const matches = pokemonNames
+                    .filter((n) => n.toLowerCase().startsWith(val.toLowerCase()))
+                    .slice(0, 8);
+                  setSuggestions(matches);
+                  setShowSuggestions(matches.length > 0);
+                } else {
+                  setShowSuggestions(false);
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setSelectedIndex((prev) => Math.min(prev + 1, suggestions.length - 1));
+                } else if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setSelectedIndex((prev) => Math.max(prev - 1, -1));
+                } else if (e.key === "Enter") {
+                  if (selectedIndex >= 0 && suggestions[selectedIndex]) {
+                    update("name", suggestions[selectedIndex]);
+                    setShowSuggestions(false);
+                  }
+                  onSearch();
+                } else if (e.key === "Escape") {
+                  setShowSuggestions(false);
+                }
+              }}
+              onFocus={() => {
+                if (suggestions.length > 0 && filters.name.length >= 1) setShowSuggestions(true);
+              }}
               placeholder="e.g. Charizard"
               className="w-full px-3 py-2 rounded-lg bg-white/10 border border-white/10 text-white text-sm placeholder-gray-600 focus:outline-none focus:border-[#e63946] transition"
             />
+            {showSuggestions && (
+              <div className="absolute z-50 w-full mt-1 rounded-lg bg-[#1a1a2e] border border-white/10 shadow-xl overflow-hidden">
+                {suggestions.map((name, i) => (
+                  <div
+                    key={name}
+                    onClick={() => {
+                      update("name", name);
+                      setShowSuggestions(false);
+                    }}
+                    className={`px-3 py-2 cursor-pointer text-sm transition ${
+                      i === selectedIndex
+                        ? "bg-[#e63946] text-white"
+                        : "text-gray-300 hover:bg-white/10"
+                    }`}
+                  >
+                    {name}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Set */}
