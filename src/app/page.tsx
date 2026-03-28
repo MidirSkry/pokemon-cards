@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
-import SearchBar from "@/components/SearchBar";
+import FilterPanel, { Filters, emptyFilters } from "@/components/FilterPanel";
 import SortSelect, { SortOption } from "@/components/SortSelect";
 import CardGrid, { PokemonCard } from "@/components/CardGrid";
 
@@ -95,23 +95,36 @@ function sortCards(cards: PokemonCard[], sort: SortOption): PokemonCard[] {
   }
 }
 
+function buildSearchParams(filters: Filters): string {
+  const params = new URLSearchParams();
+  if (filters.name) params.set("name", filters.name);
+  if (filters.set) params.set("set", filters.set);
+  if (filters.supertype) params.set("supertype", filters.supertype);
+  if (filters.types) params.set("types", filters.types);
+  if (filters.rarity) params.set("rarity", filters.rarity);
+  if (filters.hpMin) params.set("hpMin", filters.hpMin);
+  if (filters.hpMax) params.set("hpMax", filters.hpMax);
+  return params.toString();
+}
+
 export default function Home() {
   const [cards, setCards] = useState<PokemonCard[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [sort, setSort] = useState<SortOption>("price-high");
-  const [searchedName, setSearchedName] = useState("");
+  const [filters, setFilters] = useState<Filters>(emptyFilters);
   const [hasSearched, setHasSearched] = useState(false);
   const [totalCount, setTotalCount] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
-  const currentSearchRef = useRef("");
+  const searchIdRef = useRef(0);
+  const activeFiltersRef = useRef("");
   const sentinelRef = useRef<HTMLDivElement>(null);
 
   const sortedCards = useMemo(() => sortCards(cards, sort), [cards, sort]);
 
   const fetchCards = useCallback(
-    async (name: string, page: number, append: boolean) => {
+    async (filterParams: string, page: number, append: boolean, searchId: number) => {
       if (page === 1) {
         setLoading(true);
       } else {
@@ -119,16 +132,16 @@ export default function Home() {
       }
 
       try {
-        const nameParam = name ? `name=${encodeURIComponent(name)}&` : "";
+        const sep = filterParams ? `${filterParams}&` : "";
         const res = await fetch(
-          `/api/search?${nameParam}page=${page}&pageSize=100`
+          `/api/search?${sep}page=${page}&pageSize=100`
         );
         const data = await res.json();
         const parsed = (data.data || []).map(parseCard);
         const total = data.totalCount || 0;
 
-        // Ignore if search changed while loading
-        if (currentSearchRef.current !== name) return;
+        // Ignore stale responses
+        if (searchIdRef.current !== searchId) return;
 
         setTotalCount(total);
         setCards((prev) => (append ? [...prev, ...parsed] : parsed));
@@ -144,12 +157,13 @@ export default function Home() {
     []
   );
 
-  async function handleSearch(name: string) {
-    currentSearchRef.current = name;
+  function handleSearch() {
+    const id = ++searchIdRef.current;
+    const filterParams = buildSearchParams(filters);
+    activeFiltersRef.current = filterParams;
     setHasSearched(true);
-    setSearchedName(name || "All Cards");
     setCards([]);
-    fetchCards(name, 1, false);
+    fetchCards(filterParams, 1, false, id);
   }
 
   // Infinite scroll observer
@@ -160,7 +174,12 @@ export default function Home() {
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries[0].isIntersecting && hasMore && !loading && !loadingMore) {
-          fetchCards(currentSearchRef.current, currentPage + 1, true);
+          fetchCards(
+            activeFiltersRef.current,
+            currentPage + 1,
+            true,
+            searchIdRef.current
+          );
         }
       },
       { rootMargin: "400px" }
@@ -170,21 +189,38 @@ export default function Home() {
     return () => observer.unobserve(sentinel);
   }, [hasMore, loading, loadingMore, currentPage, fetchCards]);
 
+  const filterSummary = [
+    filters.name && `"${filters.name}"`,
+    filters.set && `set: ${filters.set}`,
+    filters.supertype && filters.supertype,
+    filters.types && `${filters.types} type`,
+    filters.rarity && filters.rarity,
+    (filters.hpMin || filters.hpMax) &&
+      `HP ${filters.hpMin || "0"}-${filters.hpMax || "∞"}`,
+  ]
+    .filter(Boolean)
+    .join(", ");
+
   return (
     <main className="flex-1 flex flex-col">
       {/* Header */}
       <header className="sticky top-0 z-40 bg-[#0f0f1a]/80 backdrop-blur-lg border-b border-white/5">
-        <div className="max-w-7xl mx-auto px-4 py-4">
-          <div className="flex flex-col sm:flex-row items-center gap-4">
+        <div className="max-w-7xl mx-auto px-4 py-4 space-y-3">
+          <div className="flex items-center justify-between">
             <h1 className="text-xl font-bold text-white whitespace-nowrap">
               <span className="text-[#e63946]">Pokemon</span> Card Lookup
             </h1>
-            <SearchBar onSearch={handleSearch} loading={loading} />
             <div className="flex items-center gap-2">
               <span className="text-xs text-gray-500">Sort:</span>
               <SortSelect value={sort} onChange={setSort} />
             </div>
           </div>
+          <FilterPanel
+            filters={filters}
+            onChange={setFilters}
+            onSearch={handleSearch}
+            loading={loading}
+          />
         </div>
       </header>
 
@@ -194,14 +230,14 @@ export default function Home() {
           <div className="flex-1 flex flex-col items-center justify-center py-32 text-center">
             <div className="text-6xl mb-6">&#9733;</div>
             <h2 className="text-2xl font-bold text-white mb-2">
-              Search for a Pokemon
+              Search for Pokemon Cards
             </h2>
             <p className="text-gray-500 max-w-md mb-6">
-              Type a Pokemon name to browse every card ever printed, with
-              current market prices from TCGPlayer.
+              Use the filters above to search by name, set, type, rarity, and
+              more. Or browse everything at once.
             </p>
             <button
-              onClick={() => handleSearch("")}
+              onClick={handleSearch}
               className="px-6 py-3 rounded-xl bg-[#e63946] hover:bg-[#ff6b6b] text-white font-semibold transition cursor-pointer"
             >
               Browse All Cards
@@ -219,13 +255,10 @@ export default function Home() {
                 {totalCount.toLocaleString()}
               </span>{" "}
               cards
-              {searchedName !== "All Cards" && (
+              {filterSummary && (
                 <>
                   {" "}
-                  for{" "}
-                  <span className="text-white font-semibold">
-                    &ldquo;{searchedName}&rdquo;
-                  </span>
+                  — <span className="text-gray-500">{filterSummary}</span>
                 </>
               )}
             </p>
@@ -242,7 +275,7 @@ export default function Home() {
         {hasSearched && !loading && cards.length === 0 && (
           <div className="flex flex-col items-center justify-center py-32 text-center">
             <p className="text-gray-500">
-              No cards found. Try a different name.
+              No cards found. Try adjusting your filters.
             </p>
           </div>
         )}
