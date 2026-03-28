@@ -20,9 +20,19 @@ function clientSort(cards: PokemonCard[], sort: SortOption): PokemonCard[] {
   const sorted = [...cards];
   switch (sort) {
     case "price-high":
-      return sorted.sort((a, b) => b.price - a.price);
+      return sorted.sort((a, b) => {
+        if (!a.price && !b.price) return 0;
+        if (!a.price) return 1;
+        if (!b.price) return -1;
+        return b.price - a.price;
+      });
     case "price-low":
-      return sorted.sort((a, b) => (a.price || 9999999) - (b.price || 9999999));
+      return sorted.sort((a, b) => {
+        if (!a.price && !b.price) return 0;
+        if (!a.price) return 1;
+        if (!b.price) return -1;
+        return a.price - b.price;
+      });
     case "rarity":
       return sorted.sort((a, b) => (RARITY_ORDER[b.rarity] ?? -1) - (RARITY_ORDER[a.rarity] ?? -1));
     default:
