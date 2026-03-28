@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
 const ORDER_MAP: Record<string, string> = {
-  "price-high": "-tcgplayer.prices.holofoil.market",
-  "price-low": "tcgplayer.prices.holofoil.market",
   "release-new": "-set.releaseDate",
   "release-old": "set.releaseDate",
   "hp-high": "-hp",
@@ -10,7 +8,6 @@ const ORDER_MAP: Record<string, string> = {
   "name-az": "name",
   "name-za": "-name",
   "number": "number",
-  "rarity": "-rarity",
 };
 
 export async function GET(request: NextRequest) {

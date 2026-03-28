@@ -1,9 +1,34 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import FilterPanel, { Filters, emptyFilters } from "@/components/FilterPanel";
 import SortSelect, { type SortOption } from "@/components/SortSelect";
 import CardGrid, { PokemonCard } from "@/components/CardGrid";
+
+// Sorts that the API can't handle — must be done client-side
+const CLIENT_SORTS = new Set<SortOption>(["price-high", "price-low", "rarity"]);
+
+const RARITY_ORDER: Record<string, number> = {
+  Common: 0, Uncommon: 1, Rare: 2, "Rare Holo": 3,
+  "Rare Holo EX": 4, "Rare Holo GX": 5, "Rare Holo V": 6,
+  "Rare Ultra": 7, "Rare Rainbow": 8, "Rare Secret": 9,
+  "Rare Shiny": 10, "Rare Shining": 11, LEGEND: 12, "Amazing Rare": 13,
+};
+
+function clientSort(cards: PokemonCard[], sort: SortOption): PokemonCard[] {
+  if (!CLIENT_SORTS.has(sort)) return cards;
+  const sorted = [...cards];
+  switch (sort) {
+    case "price-high":
+      return sorted.sort((a, b) => b.price - a.price);
+    case "price-low":
+      return sorted.sort((a, b) => (a.price || 9999999) - (b.price || 9999999));
+    case "rarity":
+      return sorted.sort((a, b) => (RARITY_ORDER[b.rarity] ?? -1) - (RARITY_ORDER[a.rarity] ?? -1));
+    default:
+      return sorted;
+  }
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function parseCard(card: any): PokemonCard {
@@ -55,7 +80,7 @@ export default function Home() {
   const [cards, setCards] = useState<PokemonCard[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [sort, setSort] = useState<SortOption>("price-high");
+  const [sort, setSort] = useState<SortOption>("release-new");
   const [filters, setFilters] = useState<Filters>(emptyFilters);
   const [hasSearched, setHasSearched] = useState(false);
   const [totalCount, setTotalCount] = useState(0);
@@ -63,8 +88,10 @@ export default function Home() {
   const [hasMore, setHasMore] = useState(false);
   const searchIdRef = useRef(0);
   const activeFiltersRef = useRef("");
-  const activeSortRef = useRef<SortOption>("price-high");
+  const activeSortRef = useRef<SortOption>("release-new");
   const sentinelRef = useRef<HTMLDivElement>(null);
+
+  const displayCards = useMemo(() => clientSort(cards, sort), [cards, sort]);
 
   const fetchCards = useCallback(
     async (filterParams: string, sortKey: SortOption, page: number, append: boolean, searchId: number) => {
@@ -76,14 +103,15 @@ export default function Home() {
 
       try {
         const sep = filterParams ? `${filterParams}&` : "";
+        // For client-side sorts, use default API ordering
+        const apiSort = CLIENT_SORTS.has(sortKey) ? "release-new" : sortKey;
         const res = await fetch(
-          `/api/search?${sep}sort=${sortKey}&page=${page}&pageSize=100`
+          `/api/search?${sep}sort=${apiSort}&page=${page}&pageSize=100`
         );
         const data = await res.json();
         const parsed = (data.data || []).map(parseCard);
         const total = data.totalCount || 0;
 
-        // Ignore stale responses
         if (searchIdRef.current !== searchId) return;
 
         setTotalCount(total);
@@ -113,9 +141,13 @@ export default function Home() {
 
   function handleSortChange(newSort: SortOption) {
     setSort(newSort);
-    if (hasSearched) {
-      handleSearch(newSort);
-    }
+    if (!hasSearched) return;
+
+    // Client-side sorts don't need a re-fetch
+    if (CLIENT_SORTS.has(newSort)) return;
+
+    // Server-side sorts need a fresh fetch
+    handleSearch(newSort);
   }
 
   // Infinite scroll observer
@@ -199,7 +231,7 @@ export default function Home() {
         )}
 
         {hasSearched && !loading && (
-          <div className="mb-4 flex items-center justify-between">
+          <div className="mb-4">
             <p className="text-sm text-gray-400">
               Showing{" "}
               <span className="text-white font-semibold">{cards.length}</span>{" "}
@@ -210,9 +242,13 @@ export default function Home() {
               cards
               {filterSummary && (
                 <>
-                  {" "}
-                  — <span className="text-gray-500">{filterSummary}</span>
+                  {" "} — <span className="text-gray-500">{filterSummary}</span>
                 </>
+              )}
+              {CLIENT_SORTS.has(sort) && (
+                <span className="text-gray-600 ml-2">
+                  (sorted within loaded cards)
+                </span>
               )}
             </p>
           </div>
@@ -233,8 +269,8 @@ export default function Home() {
           </div>
         )}
 
-        {!loading && cards.length > 0 && (
-          <CardGrid cards={cards} />
+        {!loading && displayCards.length > 0 && (
+          <CardGrid cards={displayCards} />
         )}
 
         {/* Infinite scroll sentinel */}
