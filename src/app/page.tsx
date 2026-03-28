@@ -1,65 +1,191 @@
-import Image from "next/image";
+"use client";
+
+import { useState, useMemo } from "react";
+import SearchBar from "@/components/SearchBar";
+import SortSelect, { SortOption } from "@/components/SortSelect";
+import CardGrid, { PokemonCard } from "@/components/CardGrid";
+
+const RARITY_ORDER: Record<string, number> = {
+  Common: 0,
+  Uncommon: 1,
+  Rare: 2,
+  "Rare Holo": 3,
+  "Rare Holo EX": 4,
+  "Rare Holo GX": 5,
+  "Rare Holo V": 6,
+  "Rare Ultra": 7,
+  "Rare Rainbow": 8,
+  "Rare Secret": 9,
+  "Rare Shiny": 10,
+  "Rare Shining": 11,
+  LEGEND: 12,
+  "Amazing Rare": 13,
+};
+
+function sortCards(cards: PokemonCard[], sort: SortOption): PokemonCard[] {
+  const sorted = [...cards];
+  switch (sort) {
+    case "price-high":
+      return sorted.sort((a, b) => b.price - a.price);
+    case "price-low":
+      return sorted.sort(
+        (a, b) => (a.price || 9999999) - (b.price || 9999999)
+      );
+    case "release-new":
+      return sorted.sort((a, b) => b.setRelease.localeCompare(a.setRelease));
+    case "release-old":
+      return sorted.sort((a, b) => a.setRelease.localeCompare(b.setRelease));
+    case "hp-high":
+      return sorted.sort(
+        (a, b) => (parseInt(b.hp) || 0) - (parseInt(a.hp) || 0)
+      );
+    case "hp-low":
+      return sorted.sort(
+        (a, b) => (parseInt(a.hp) || 9999) - (parseInt(b.hp) || 9999)
+      );
+    case "rarity":
+      return sorted.sort(
+        (a, b) =>
+          (RARITY_ORDER[b.rarity] ?? -1) - (RARITY_ORDER[a.rarity] ?? -1)
+      );
+    case "name-az":
+      return sorted.sort((a, b) => a.name.localeCompare(b.name));
+    case "name-za":
+      return sorted.sort((a, b) => b.name.localeCompare(a.name));
+    case "number":
+      return sorted.sort(
+        (a, b) => (parseInt(a.number) || 9999) - (parseInt(b.number) || 9999)
+      );
+    default:
+      return sorted;
+  }
+}
 
 export default function Home() {
+  const [cards, setCards] = useState<PokemonCard[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [sort, setSort] = useState<SortOption>("price-high");
+  const [searchedName, setSearchedName] = useState("");
+  const [hasSearched, setHasSearched] = useState(false);
+
+  const sortedCards = useMemo(() => sortCards(cards, sort), [cards, sort]);
+
+  async function handleSearch(name: string) {
+    setLoading(true);
+    setHasSearched(true);
+    setSearchedName(name);
+
+    try {
+      const res = await fetch(`/api/search?name=${encodeURIComponent(name)}`);
+      const data = await res.json();
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const parsed: PokemonCard[] = (data.data || []).map((card: any) => {
+        let priceVal = 0;
+        const pricesDetail: Record<string, Record<string, number>> = {};
+
+        if (card.tcgplayer?.prices) {
+          for (const [variant, priceData] of Object.entries(
+            card.tcgplayer.prices
+          )) {
+            pricesDetail[variant] = priceData as Record<string, number>;
+            const market = (priceData as Record<string, number>).market;
+            if (market && priceVal === 0) priceVal = market;
+          }
+        }
+
+        return {
+          name: card.name,
+          set: card.set?.name || "Unknown",
+          rarity: card.rarity || "Unknown",
+          price: priceVal,
+          imageSmall: card.images?.small || "",
+          imageLarge: card.images?.large || "",
+          artist: card.artist || "Unknown",
+          number: card.number || "?",
+          setTotal: card.set?.printedTotal?.toString() || "?",
+          setSeries: card.set?.series || "Unknown",
+          setRelease: card.set?.releaseDate || "Unknown",
+          types: (card.types || []).join(", ") || "N/A",
+          hp: card.hp || "N/A",
+          supertype: card.supertype || "Unknown",
+          subtypes: (card.subtypes || []).join(", ") || "N/A",
+          pricesDetail,
+          tcgplayerUrl: card.tcgplayer?.url || "",
+        };
+      });
+
+      setCards(parsed);
+    } catch {
+      setCards([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <main className="flex-1 flex flex-col">
+      {/* Header */}
+      <header className="sticky top-0 z-40 bg-[#0f0f1a]/80 backdrop-blur-lg border-b border-white/5">
+        <div className="max-w-7xl mx-auto px-4 py-4">
+          <div className="flex flex-col sm:flex-row items-center gap-4">
+            <h1 className="text-xl font-bold text-white whitespace-nowrap">
+              <span className="text-[#e63946]">Pokemon</span> Card Lookup
+            </h1>
+            <SearchBar onSearch={handleSearch} loading={loading} />
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-500">Sort:</span>
+              <SortSelect value={sort} onChange={setSort} />
+            </div>
+          </div>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+      </header>
+
+      {/* Content */}
+      <div className="flex-1 max-w-7xl mx-auto w-full px-4 py-6">
+        {!hasSearched && (
+          <div className="flex-1 flex flex-col items-center justify-center py-32 text-center">
+            <div className="text-6xl mb-6">&#9733;</div>
+            <h2 className="text-2xl font-bold text-white mb-2">
+              Search for a Pokemon
+            </h2>
+            <p className="text-gray-500 max-w-md">
+              Type a Pokemon name to browse every card ever printed, with
+              current market prices from TCGPlayer.
+            </p>
+          </div>
+        )}
+
+        {hasSearched && !loading && (
+          <div className="mb-4 flex items-center justify-between">
+            <p className="text-sm text-gray-400">
+              Found{" "}
+              <span className="text-white font-semibold">{cards.length}</span>{" "}
+              cards for{" "}
+              <span className="text-white font-semibold">&ldquo;{searchedName}&rdquo;</span>
+            </p>
+          </div>
+        )}
+
+        {loading && (
+          <div className="flex flex-col items-center justify-center py-32">
+            <div className="w-10 h-10 border-3 border-white/20 border-t-[#e63946] rounded-full animate-spin mb-4" />
+            <p className="text-gray-500">Searching cards...</p>
+          </div>
+        )}
+
+        {hasSearched && !loading && cards.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-32 text-center">
+            <p className="text-gray-500">
+              No cards found. Try a different name.
+            </p>
+          </div>
+        )}
+
+        {!loading && sortedCards.length > 0 && (
+          <CardGrid cards={sortedCards} />
+        )}
+      </div>
+    </main>
   );
 }
