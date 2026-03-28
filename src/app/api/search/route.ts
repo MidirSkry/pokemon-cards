@@ -39,6 +39,11 @@ export async function GET(request: NextRequest) {
   else if (hpMin) queryParts.push(`hp:[${hpMin} TO *]`);
   else if (hpMax) queryParts.push(`hp:[* TO ${hpMax}]`);
 
+  // When sorting by price, only return cards that have tcgplayer pricing
+  if (params.get("hasPrice") === "true") {
+    queryParts.push(`tcgplayer.url:*`);
+  }
+
   const orderBy = ORDER_MAP[sort] || "-set.releaseDate";
   const queryStr = queryParts.length > 0 ? `q=${encodeURIComponent(queryParts.join(" "))}&` : "";
   const url = `https://api.pokemontcg.io/v2/cards?${queryStr}orderBy=${orderBy}&page=${page}&pageSize=${pageSize}`;

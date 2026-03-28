@@ -115,8 +115,9 @@ export default function Home() {
         const sep = filterParams ? `${filterParams}&` : "";
         // For client-side sorts, use default API ordering
         const apiSort = CLIENT_SORTS.has(sortKey) ? "release-new" : sortKey;
+        const hasPrice = sortKey === "price-high" || sortKey === "price-low" ? "&hasPrice=true" : "";
         const res = await fetch(
-          `/api/search?${sep}sort=${apiSort}&page=${page}&pageSize=100`
+          `/api/search?${sep}sort=${apiSort}&page=${page}&pageSize=100${hasPrice}`
         );
         const data = await res.json();
         const parsed = (data.data || []).map(parseCard);
@@ -153,10 +154,18 @@ export default function Home() {
     setSort(newSort);
     if (!hasSearched) return;
 
-    // Client-side sorts don't need a re-fetch
-    if (CLIENT_SORTS.has(newSort)) return;
+    const oldSort = activeSortRef.current;
+    const priceSorts: SortOption[] = ["price-high", "price-low"];
+    const wasPriceSort = priceSorts.includes(oldSort);
+    const isPriceSort = priceSorts.includes(newSort);
 
-    // Server-side sorts need a fresh fetch
+    // Switching between price-high and price-low doesn't need re-fetch
+    if (wasPriceSort && isPriceSort) return;
+
+    // Rarity sort within already loaded data doesn't need re-fetch
+    if (newSort === "rarity" && !wasPriceSort) return;
+
+    // Everything else needs a re-fetch (server sorts, or switching to/from price)
     handleSearch(newSort);
   }
 
