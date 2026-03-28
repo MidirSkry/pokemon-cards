@@ -11,6 +11,11 @@ const SERVER_SORTS = new Set<SortOption>([
   "name-az", "name-za", "number",
 ]);
 
+// Sorts that need all data loaded first
+const CLIENT_SORTS = new Set<SortOption>(["price-high", "price-low", "rarity"]);
+
+const MAX_CLIENT_SORT_CARDS = 2000; // Max cards to fetch for client sorts
+
 const RARITY_ORDER: Record<string, number> = {
   Common: 0, Uncommon: 1, Rare: 2, "Rare Holo": 3,
   "Rare Holo EX": 4, "Rare Holo GX": 5, "Rare Holo V": 6,
@@ -19,7 +24,7 @@ const RARITY_ORDER: Record<string, number> = {
 };
 
 function clientSort(cards: PokemonCard[], sort: SortOption): PokemonCard[] {
-  if (SERVER_SORTS.has(sort)) return cards; // already sorted by API
+  if (SERVER_SORTS.has(sort)) return cards;
   const sorted = [...cards];
   switch (sort) {
     case "price-high":
@@ -93,21 +98,23 @@ export default function Home() {
   const [cards, setCards] = useState<PokemonCard[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [loadingProgress, setLoadingProgress] = useState("");
   const [sort, setSort] = useState<SortOption>("release-new");
   const [filters, setFilters] = useState<Filters>(emptyFilters);
   const [hasSearched, setHasSearched] = useState(false);
   const [totalCount, setTotalCount] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
+  const [allLoaded, setAllLoaded] = useState(false);
   const searchIdRef = useRef(0);
   const activeFiltersRef = useRef("");
   const activeSortRef = useRef<SortOption>("release-new");
   const sentinelRef = useRef<HTMLDivElement>(null);
 
-  // Client sort for price/rarity, passthrough for server-sorted fields
   const displayCards = useMemo(() => clientSort(cards, sort), [cards, sort]);
 
-  const fetchCards = useCallback(
+  // Fetch a single page (used for server-sorted infinite scroll)
+  const fetchPage = useCallback(
     async (filterParams: string, sortKey: SortOption, page: number, append: boolean, searchId: number) => {
       if (page === 1) {
         setLoading(true);
@@ -117,9 +124,8 @@ export default function Home() {
 
       try {
         const sep = filterParams ? `${filterParams}&` : "";
-        const apiSort = SERVER_SORTS.has(sortKey) ? sortKey : "release-new";
         const res = await fetch(
-          `/api/search?${sep}sort=${apiSort}&page=${page}&pageSize=100`
+          `/api/search?${sep}sort=${sortKey}&page=${page}&pageSize=250`
         );
         const data = await res.json();
         const parsed = (data.data || []).map(parseCard);
@@ -130,12 +136,78 @@ export default function Home() {
         setTotalCount(total);
         setCards((prev) => (append ? [...prev, ...parsed] : parsed));
         setCurrentPage(page);
-        setHasMore(page * 100 < total);
+        setHasMore(page * 250 < total);
+        setAllLoaded(false);
       } catch {
         if (!append) setCards([]);
       } finally {
         setLoading(false);
         setLoadingMore(false);
+        setLoadingProgress("");
+      }
+    },
+    []
+  );
+
+  // Fetch ALL pages (used for client-sorted results like price/rarity)
+  const fetchAllPages = useCallback(
+    async (filterParams: string, searchId: number) => {
+      setLoading(true);
+      setLoadingProgress("Loading page 1...");
+
+      try {
+        const sep = filterParams ? `${filterParams}&` : "";
+
+        // First page to get total count
+        const res1 = await fetch(
+          `/api/search?${sep}sort=release-new&page=1&pageSize=250`
+        );
+        const data1 = await res1.json();
+        const total = data1.totalCount || 0;
+
+        if (searchIdRef.current !== searchId) return;
+
+        let allCards = (data1.data || []).map(parseCard);
+        setTotalCount(total);
+
+        const cardsToFetch = Math.min(total, MAX_CLIENT_SORT_CARDS);
+        const totalPages = Math.ceil(cardsToFetch / 250);
+
+        // Fetch remaining pages in batches of 4
+        for (let batch = 1; batch < totalPages; batch += 4) {
+          const pagePromises = [];
+          for (let p = batch + 1; p <= Math.min(batch + 4, totalPages); p++) {
+            pagePromises.push(
+              fetch(`/api/search?${sep}sort=release-new&page=${p}&pageSize=250`)
+                .then((r) => r.json())
+            );
+          }
+
+          if (searchIdRef.current !== searchId) return;
+
+          setLoadingProgress(
+            `Loading cards... ${Math.min(allCards.length, cardsToFetch)} / ${cardsToFetch}`
+          );
+
+          const results = await Promise.all(pagePromises);
+          for (const data of results) {
+            if (searchIdRef.current !== searchId) return;
+            allCards = allCards.concat((data.data || []).map(parseCard));
+          }
+        }
+
+        if (searchIdRef.current !== searchId) return;
+
+        allCards = allCards.slice(0, cardsToFetch);
+        setCards(allCards);
+        setCurrentPage(totalPages);
+        setHasMore(false);
+        setAllLoaded(true);
+      } catch {
+        setCards([]);
+      } finally {
+        setLoading(false);
+        setLoadingProgress("");
       }
     },
     []
@@ -148,7 +220,13 @@ export default function Home() {
     activeSortRef.current = sortKey;
     setHasSearched(true);
     setCards([]);
-    fetchCards(filterParams, sortKey, 1, false, id);
+    setAllLoaded(false);
+
+    if (CLIENT_SORTS.has(sortKey)) {
+      fetchAllPages(filterParams, id);
+    } else {
+      fetchPage(filterParams, sortKey, 1, false, id);
+    }
   }
 
   function handleSearch() {
@@ -156,29 +234,29 @@ export default function Home() {
   }
 
   function handleSortChange(newSort: SortOption) {
+    const prevSort = sort;
     setSort(newSort);
     if (!hasSearched) return;
 
-    // Server sorts always need a re-fetch
-    if (SERVER_SORTS.has(newSort)) {
-      doSearch(newSort);
+    // If switching between two client sorts and we already have all data, just re-sort
+    if (CLIENT_SORTS.has(newSort) && CLIENT_SORTS.has(prevSort) && allLoaded) {
+      activeSortRef.current = newSort;
       return;
     }
 
-    // Client sorts (price, rarity): useMemo handles re-sorting loaded cards
-    // No re-fetch needed — displayCards updates automatically
-    activeSortRef.current = newSort;
+    // Otherwise re-fetch with new sort strategy
+    doSearch(newSort);
   }
 
-  // Infinite scroll observer
+  // Infinite scroll observer (only for server-sorted mode)
   useEffect(() => {
     const sentinel = sentinelRef.current;
     if (!sentinel) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting && hasMore && !loading && !loadingMore) {
-          fetchCards(
+        if (entries[0].isIntersecting && hasMore && !loading && !loadingMore && !allLoaded) {
+          fetchPage(
             activeFiltersRef.current,
             activeSortRef.current,
             currentPage + 1,
@@ -192,7 +270,7 @@ export default function Home() {
 
     observer.observe(sentinel);
     return () => observer.unobserve(sentinel);
-  }, [hasMore, loading, loadingMore, currentPage, fetchCards]);
+  }, [hasMore, loading, loadingMore, currentPage, allLoaded, fetchPage]);
 
   const filterSummary = [
     filters.name && `"${filters.name}"`,
@@ -253,12 +331,18 @@ export default function Home() {
         {hasSearched && !loading && (
           <div className="mb-4">
             <p className="text-sm text-gray-400">
-              Showing{" "}
-              <span className="text-white font-semibold">{cards.length}</span>{" "}
-              of{" "}
+              {allLoaded ? "Sorted" : "Showing"}{" "}
               <span className="text-white font-semibold">
-                {totalCount.toLocaleString()}
-              </span>{" "}
+                {displayCards.length.toLocaleString()}
+              </span>
+              {!allLoaded && (
+                <>
+                  {" "}of{" "}
+                  <span className="text-white font-semibold">
+                    {totalCount.toLocaleString()}
+                  </span>
+                </>
+              )}{" "}
               cards
               {filterSummary && (
                 <>
@@ -272,7 +356,9 @@ export default function Home() {
         {loading && (
           <div className="flex flex-col items-center justify-center py-32">
             <div className="w-10 h-10 border-3 border-white/20 border-t-[#e63946] rounded-full animate-spin mb-4" />
-            <p className="text-gray-500">Searching cards...</p>
+            <p className="text-gray-500">
+              {loadingProgress || "Searching cards..."}
+            </p>
           </div>
         )}
 
