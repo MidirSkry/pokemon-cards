@@ -5,8 +5,11 @@ import FilterPanel, { Filters, emptyFilters } from "@/components/FilterPanel";
 import SortSelect, { type SortOption } from "@/components/SortSelect";
 import CardGrid, { PokemonCard } from "@/components/CardGrid";
 
-// Sorts that the API can't handle — must be done client-side
-const CLIENT_SORTS = new Set<SortOption>(["price-high", "price-low", "rarity"]);
+// Sorts the API can handle via orderBy
+const SERVER_SORTS = new Set<SortOption>([
+  "release-new", "release-old", "hp-high", "hp-low",
+  "name-az", "name-za", "number",
+]);
 
 const RARITY_ORDER: Record<string, number> = {
   Common: 0, Uncommon: 1, Rare: 2, "Rare Holo": 3,
@@ -16,7 +19,7 @@ const RARITY_ORDER: Record<string, number> = {
 };
 
 function clientSort(cards: PokemonCard[], sort: SortOption): PokemonCard[] {
-  if (!CLIENT_SORTS.has(sort)) return cards;
+  if (SERVER_SORTS.has(sort)) return cards; // already sorted by API
   const sorted = [...cards];
   switch (sort) {
     case "price-high":
@@ -101,6 +104,7 @@ export default function Home() {
   const activeSortRef = useRef<SortOption>("release-new");
   const sentinelRef = useRef<HTMLDivElement>(null);
 
+  // Client sort for price/rarity, passthrough for server-sorted fields
   const displayCards = useMemo(() => clientSort(cards, sort), [cards, sort]);
 
   const fetchCards = useCallback(
@@ -113,11 +117,9 @@ export default function Home() {
 
       try {
         const sep = filterParams ? `${filterParams}&` : "";
-        // For client-side sorts, use default API ordering
-        const apiSort = CLIENT_SORTS.has(sortKey) ? "release-new" : sortKey;
-        const hasPrice = sortKey === "price-high" || sortKey === "price-low" ? "&hasPrice=true" : "";
+        const apiSort = SERVER_SORTS.has(sortKey) ? sortKey : "release-new";
         const res = await fetch(
-          `/api/search?${sep}sort=${apiSort}&page=${page}&pageSize=100${hasPrice}`
+          `/api/search?${sep}sort=${apiSort}&page=${page}&pageSize=100`
         );
         const data = await res.json();
         const parsed = (data.data || []).map(parseCard);
@@ -139,10 +141,9 @@ export default function Home() {
     []
   );
 
-  function handleSearch(sortOverride?: SortOption) {
+  function doSearch(sortKey: SortOption) {
     const id = ++searchIdRef.current;
     const filterParams = buildSearchParams(filters);
-    const sortKey = sortOverride || sort;
     activeFiltersRef.current = filterParams;
     activeSortRef.current = sortKey;
     setHasSearched(true);
@@ -150,23 +151,23 @@ export default function Home() {
     fetchCards(filterParams, sortKey, 1, false, id);
   }
 
+  function handleSearch() {
+    doSearch(sort);
+  }
+
   function handleSortChange(newSort: SortOption) {
     setSort(newSort);
     if (!hasSearched) return;
 
-    const oldSort = activeSortRef.current;
-    const priceSorts: SortOption[] = ["price-high", "price-low"];
-    const wasPriceSort = priceSorts.includes(oldSort);
-    const isPriceSort = priceSorts.includes(newSort);
+    // Server sorts always need a re-fetch
+    if (SERVER_SORTS.has(newSort)) {
+      doSearch(newSort);
+      return;
+    }
 
-    // Switching between price-high and price-low doesn't need re-fetch
-    if (wasPriceSort && isPriceSort) return;
-
-    // Rarity sort within already loaded data doesn't need re-fetch
-    if (newSort === "rarity" && !wasPriceSort) return;
-
-    // Everything else needs a re-fetch (server sorts, or switching to/from price)
-    handleSearch(newSort);
+    // Client sorts (price, rarity): useMemo handles re-sorting loaded cards
+    // No re-fetch needed — displayCards updates automatically
+    activeSortRef.current = newSort;
   }
 
   // Infinite scroll observer
@@ -241,7 +242,7 @@ export default function Home() {
               more. Or browse everything at once.
             </p>
             <button
-              onClick={() => handleSearch()}
+              onClick={handleSearch}
               className="px-6 py-3 rounded-xl bg-[#e63946] hover:bg-[#ff6b6b] text-white font-semibold transition cursor-pointer"
             >
               Browse All Cards
@@ -263,11 +264,6 @@ export default function Home() {
                 <>
                   {" "} — <span className="text-gray-500">{filterSummary}</span>
                 </>
-              )}
-              {CLIENT_SORTS.has(sort) && (
-                <span className="text-gray-600 ml-2">
-                  (sorted within loaded cards)
-                </span>
               )}
             </p>
           </div>
