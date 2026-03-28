@@ -5,16 +5,12 @@ import FilterPanel, { Filters, emptyFilters } from "@/components/FilterPanel";
 import SortSelect, { type SortOption } from "@/components/SortSelect";
 import CardGrid, { PokemonCard } from "@/components/CardGrid";
 
-// Sorts the API can handle via orderBy
 const SERVER_SORTS = new Set<SortOption>([
   "release-new", "release-old", "hp-high", "hp-low",
   "name-az", "name-za", "number",
 ]);
 
-// Sorts that need all data loaded first
-const CLIENT_SORTS = new Set<SortOption>(["price-high", "price-low", "rarity"]);
-
-const MAX_CLIENT_SORT_CARDS = 2000; // Max cards to fetch for client sorts
+const PRICE_SORTS = new Set<SortOption>(["price-high", "price-low"]);
 
 const RARITY_ORDER: Record<string, number> = {
   Common: 0, Uncommon: 1, Rare: 2, "Rare Holo": 3,
@@ -24,28 +20,8 @@ const RARITY_ORDER: Record<string, number> = {
 };
 
 function clientSort(cards: PokemonCard[], sort: SortOption): PokemonCard[] {
-  if (SERVER_SORTS.has(sort)) return cards;
-  const sorted = [...cards];
-  switch (sort) {
-    case "price-high":
-      return sorted.sort((a, b) => {
-        if (!a.price && !b.price) return 0;
-        if (!a.price) return 1;
-        if (!b.price) return -1;
-        return b.price - a.price;
-      });
-    case "price-low":
-      return sorted.sort((a, b) => {
-        if (!a.price && !b.price) return 0;
-        if (!a.price) return 1;
-        if (!b.price) return -1;
-        return a.price - b.price;
-      });
-    case "rarity":
-      return sorted.sort((a, b) => (RARITY_ORDER[b.rarity] ?? -1) - (RARITY_ORDER[a.rarity] ?? -1));
-    default:
-      return sorted;
-  }
+  if (sort !== "rarity") return cards;
+  return [...cards].sort((a, b) => (RARITY_ORDER[b.rarity] ?? -1) - (RARITY_ORDER[a.rarity] ?? -1));
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -82,6 +58,28 @@ function parseCard(card: any): PokemonCard {
   };
 }
 
+function parseCachedCard(card: any): PokemonCard {
+  return {
+    name: card.name,
+    set: card.set,
+    rarity: card.rarity,
+    price: card.price,
+    imageSmall: card.imageSmall,
+    imageLarge: card.imageLarge,
+    artist: card.artist,
+    number: card.number,
+    setTotal: card.setTotal,
+    setSeries: card.setSeries,
+    setRelease: card.setRelease,
+    types: card.types,
+    hp: card.hp,
+    supertype: card.supertype,
+    subtypes: card.subtypes,
+    pricesDetail: card.prices || {},
+    tcgplayerUrl: card.tcgplayerUrl,
+  };
+}
+
 function buildSearchParams(filters: Filters): string {
   const params = new URLSearchParams();
   if (filters.name) params.set("name", filters.name);
@@ -98,14 +96,12 @@ export default function Home() {
   const [cards, setCards] = useState<PokemonCard[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [loadingProgress, setLoadingProgress] = useState("");
   const [sort, setSort] = useState<SortOption>("release-new");
   const [filters, setFilters] = useState<Filters>(emptyFilters);
   const [hasSearched, setHasSearched] = useState(false);
   const [totalCount, setTotalCount] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
-  const [allLoaded, setAllLoaded] = useState(false);
   const searchIdRef = useRef(0);
   const activeFiltersRef = useRef("");
   const activeSortRef = useRef<SortOption>("release-new");
@@ -113,20 +109,15 @@ export default function Home() {
 
   const displayCards = useMemo(() => clientSort(cards, sort), [cards, sort]);
 
-  // Fetch a single page (used for server-sorted infinite scroll)
-  const fetchPage = useCallback(
+  // Fetch from the regular search API (server-sorted fields)
+  const fetchFromApi = useCallback(
     async (filterParams: string, sortKey: SortOption, page: number, append: boolean, searchId: number) => {
-      if (page === 1) {
-        setLoading(true);
-      } else {
-        setLoadingMore(true);
-      }
+      if (page === 1) setLoading(true);
+      else setLoadingMore(true);
 
       try {
         const sep = filterParams ? `${filterParams}&` : "";
-        const res = await fetch(
-          `/api/search?${sep}sort=${sortKey}&page=${page}&pageSize=250`
-        );
+        const res = await fetch(`/api/search?${sep}sort=${sortKey}&page=${page}&pageSize=250`);
         const data = await res.json();
         const parsed = (data.data || []).map(parseCard);
         const total = data.totalCount || 0;
@@ -137,81 +128,61 @@ export default function Home() {
         setCards((prev) => (append ? [...prev, ...parsed] : parsed));
         setCurrentPage(page);
         setHasMore(page * 250 < total);
-        setAllLoaded(false);
       } catch {
         if (!append) setCards([]);
       } finally {
         setLoading(false);
         setLoadingMore(false);
-        setLoadingProgress("");
       }
     },
     []
   );
 
-  // Fetch ALL pages (used for client-sorted results like price/rarity)
-  const fetchAllPages = useCallback(
-    async (filterParams: string, searchId: number) => {
-      setLoading(true);
-      setLoadingProgress("Loading page 1...");
+  // Fetch from the price cache (instant, pre-sorted)
+  const fetchFromPriceCache = useCallback(
+    async (filterParams: string, sortKey: SortOption, page: number, append: boolean, searchId: number) => {
+      if (page === 1) setLoading(true);
+      else setLoadingMore(true);
 
       try {
         const sep = filterParams ? `${filterParams}&` : "";
+        const direction = sortKey === "price-low" ? "asc" : "desc";
+        const res = await fetch(`/api/prices?${sep}direction=${direction}&page=${page}&pageSize=100`);
+        const data = await res.json();
 
-        // First page to get total count
-        const res1 = await fetch(
-          `/api/search?${sep}sort=release-new&page=1&pageSize=250`
-        );
-        const data1 = await res1.json();
-        const total = data1.totalCount || 0;
-
-        if (searchIdRef.current !== searchId) return;
-
-        let allCards = (data1.data || []).map(parseCard);
-        setTotalCount(total);
-
-        const cardsToFetch = Math.min(total, MAX_CLIENT_SORT_CARDS);
-        const totalPages = Math.ceil(cardsToFetch / 250);
-
-        // Fetch remaining pages in batches of 4
-        for (let batch = 1; batch < totalPages; batch += 4) {
-          const pagePromises = [];
-          for (let p = batch + 1; p <= Math.min(batch + 4, totalPages); p++) {
-            pagePromises.push(
-              fetch(`/api/search?${sep}sort=release-new&page=${p}&pageSize=250`)
-                .then((r) => r.json())
-            );
-          }
-
-          if (searchIdRef.current !== searchId) return;
-
-          setLoadingProgress(
-            `Loading cards... ${Math.min(allCards.length, cardsToFetch)} / ${cardsToFetch}`
-          );
-
-          const results = await Promise.all(pagePromises);
-          for (const data of results) {
-            if (searchIdRef.current !== searchId) return;
-            allCards = allCards.concat((data.data || []).map(parseCard));
-          }
+        if (!data.cached) {
+          // Cache not built yet — fall back to regular API
+          fetchFromApi(filterParams, "release-new", page, append, searchId);
+          return;
         }
 
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const parsed = (data.data || []).map((c: any) => parseCachedCard(c));
+        const total = data.totalCount || 0;
+
         if (searchIdRef.current !== searchId) return;
 
-        allCards = allCards.slice(0, cardsToFetch);
-        setCards(allCards);
-        setCurrentPage(totalPages);
-        setHasMore(false);
-        setAllLoaded(true);
+        setTotalCount(total);
+        setCards((prev) => (append ? [...prev, ...parsed] : parsed));
+        setCurrentPage(page);
+        setHasMore(page * 100 < total);
       } catch {
-        setCards([]);
+        if (!append) setCards([]);
       } finally {
         setLoading(false);
-        setLoadingProgress("");
+        setLoadingMore(false);
       }
     },
-    []
+    [fetchFromApi]
   );
+
+  function doFetch(filterParams: string, sortKey: SortOption, page: number, append: boolean, searchId: number) {
+    if (PRICE_SORTS.has(sortKey)) {
+      fetchFromPriceCache(filterParams, sortKey, page, append, searchId);
+    } else {
+      fetchFromApi(filterParams, sortKey, page, append, searchId);
+    }
+  }
 
   function doSearch(sortKey: SortOption) {
     const id = ++searchIdRef.current;
@@ -220,13 +191,7 @@ export default function Home() {
     activeSortRef.current = sortKey;
     setHasSearched(true);
     setCards([]);
-    setAllLoaded(false);
-
-    if (CLIENT_SORTS.has(sortKey)) {
-      fetchAllPages(filterParams, id);
-    } else {
-      fetchPage(filterParams, sortKey, 1, false, id);
-    }
+    doFetch(filterParams, sortKey, 1, false, id);
   }
 
   function handleSearch() {
@@ -238,25 +203,26 @@ export default function Home() {
     setSort(newSort);
     if (!hasSearched) return;
 
-    // If switching between two client sorts and we already have all data, just re-sort
-    if (CLIENT_SORTS.has(newSort) && CLIENT_SORTS.has(prevSort) && allLoaded) {
+    // Switching between price-high and price-low just needs a re-fetch from cache (fast)
+    // Everything else needs a re-fetch too
+    // Only rarity within non-price data can skip
+    if (newSort === "rarity" && !PRICE_SORTS.has(prevSort)) {
       activeSortRef.current = newSort;
       return;
     }
 
-    // Otherwise re-fetch with new sort strategy
     doSearch(newSort);
   }
 
-  // Infinite scroll observer (only for server-sorted mode)
+  // Infinite scroll
   useEffect(() => {
     const sentinel = sentinelRef.current;
     if (!sentinel) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting && hasMore && !loading && !loadingMore && !allLoaded) {
-          fetchPage(
+        if (entries[0].isIntersecting && hasMore && !loading && !loadingMore) {
+          doFetch(
             activeFiltersRef.current,
             activeSortRef.current,
             currentPage + 1,
@@ -270,7 +236,8 @@ export default function Home() {
 
     observer.observe(sentinel);
     return () => observer.unobserve(sentinel);
-  }, [hasMore, loading, loadingMore, currentPage, allLoaded, fetchPage]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasMore, loading, loadingMore, currentPage]);
 
   const filterSummary = [
     filters.name && `"${filters.name}"`,
@@ -286,7 +253,6 @@ export default function Home() {
 
   return (
     <main className="flex-1 flex flex-col">
-      {/* Header */}
       <header className="sticky top-0 z-40 bg-[#0f0f1a]/80 backdrop-blur-lg border-b border-white/5">
         <div className="max-w-7xl mx-auto px-4 py-4 space-y-3">
           <div className="flex items-center justify-between">
@@ -307,7 +273,6 @@ export default function Home() {
         </div>
       </header>
 
-      {/* Content */}
       <div className="flex-1 max-w-7xl mx-auto w-full px-4 py-6">
         {!hasSearched && (
           <div className="flex-1 flex flex-col items-center justify-center py-32 text-center">
@@ -331,23 +296,13 @@ export default function Home() {
         {hasSearched && !loading && (
           <div className="mb-4">
             <p className="text-sm text-gray-400">
-              {allLoaded ? "Sorted" : "Showing"}{" "}
-              <span className="text-white font-semibold">
-                {displayCards.length.toLocaleString()}
-              </span>
-              {!allLoaded && (
-                <>
-                  {" "}of{" "}
-                  <span className="text-white font-semibold">
-                    {totalCount.toLocaleString()}
-                  </span>
-                </>
-              )}{" "}
+              Showing{" "}
+              <span className="text-white font-semibold">{displayCards.length.toLocaleString()}</span>{" "}
+              of{" "}
+              <span className="text-white font-semibold">{totalCount.toLocaleString()}</span>{" "}
               cards
               {filterSummary && (
-                <>
-                  {" "} — <span className="text-gray-500">{filterSummary}</span>
-                </>
+                <> — <span className="text-gray-500">{filterSummary}</span></>
               )}
             </p>
           </div>
@@ -356,17 +311,13 @@ export default function Home() {
         {loading && (
           <div className="flex flex-col items-center justify-center py-32">
             <div className="w-10 h-10 border-3 border-white/20 border-t-[#e63946] rounded-full animate-spin mb-4" />
-            <p className="text-gray-500">
-              {loadingProgress || "Searching cards..."}
-            </p>
+            <p className="text-gray-500">Searching cards...</p>
           </div>
         )}
 
         {hasSearched && !loading && cards.length === 0 && (
           <div className="flex flex-col items-center justify-center py-32 text-center">
-            <p className="text-gray-500">
-              No cards found. Try adjusting your filters.
-            </p>
+            <p className="text-gray-500">No cards found. Try adjusting your filters.</p>
           </div>
         )}
 
@@ -374,7 +325,6 @@ export default function Home() {
           <CardGrid cards={displayCards} />
         )}
 
-        {/* Infinite scroll sentinel */}
         <div ref={sentinelRef} className="h-1" />
 
         {loadingMore && (
