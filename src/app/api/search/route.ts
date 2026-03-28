@@ -2,11 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 
 export async function GET(request: NextRequest) {
   const name = request.nextUrl.searchParams.get("name");
-  if (!name) {
-    return NextResponse.json({ error: "Name is required" }, { status: 400 });
-  }
+  const page = request.nextUrl.searchParams.get("page") || "1";
+  const pageSize = request.nextUrl.searchParams.get("pageSize") || "100";
 
-  const url = `https://api.pokemontcg.io/v2/cards?q=name:${encodeURIComponent(name)}&orderBy=-set.releaseDate&pageSize=100`;
+  const query = name ? `q=name:${encodeURIComponent(name)}&` : "";
+  const url = `https://api.pokemontcg.io/v2/cards?${query}orderBy=-set.releaseDate&page=${page}&pageSize=${pageSize}`;
   const res = await fetch(url);
   const data = await res.json();
 

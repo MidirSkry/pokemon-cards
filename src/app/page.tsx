@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import SearchBar from "@/components/SearchBar";
 import SortSelect, { SortOption } from "@/components/SortSelect";
 import CardGrid, { PokemonCard } from "@/components/CardGrid";
@@ -21,6 +21,40 @@ const RARITY_ORDER: Record<string, number> = {
   LEGEND: 12,
   "Amazing Rare": 13,
 };
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function parseCard(card: any): PokemonCard {
+  let priceVal = 0;
+  const pricesDetail: Record<string, Record<string, number>> = {};
+
+  if (card.tcgplayer?.prices) {
+    for (const [variant, priceData] of Object.entries(card.tcgplayer.prices)) {
+      pricesDetail[variant] = priceData as Record<string, number>;
+      const market = (priceData as Record<string, number>).market;
+      if (market && priceVal === 0) priceVal = market;
+    }
+  }
+
+  return {
+    name: card.name,
+    set: card.set?.name || "Unknown",
+    rarity: card.rarity || "Unknown",
+    price: priceVal,
+    imageSmall: card.images?.small || "",
+    imageLarge: card.images?.large || "",
+    artist: card.artist || "Unknown",
+    number: card.number || "?",
+    setTotal: card.set?.printedTotal?.toString() || "?",
+    setSeries: card.set?.series || "Unknown",
+    setRelease: card.set?.releaseDate || "Unknown",
+    types: (card.types || []).join(", ") || "N/A",
+    hp: card.hp || "N/A",
+    supertype: card.supertype || "Unknown",
+    subtypes: (card.subtypes || []).join(", ") || "N/A",
+    pricesDetail,
+    tcgplayerUrl: card.tcgplayer?.url || "",
+  };
+}
 
 function sortCards(cards: PokemonCard[], sort: SortOption): PokemonCard[] {
   const sorted = [...cards];
@@ -64,64 +98,77 @@ function sortCards(cards: PokemonCard[], sort: SortOption): PokemonCard[] {
 export default function Home() {
   const [cards, setCards] = useState<PokemonCard[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [sort, setSort] = useState<SortOption>("price-high");
   const [searchedName, setSearchedName] = useState("");
   const [hasSearched, setHasSearched] = useState(false);
+  const [totalCount, setTotalCount] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const currentSearchRef = useRef("");
+  const sentinelRef = useRef<HTMLDivElement>(null);
 
   const sortedCards = useMemo(() => sortCards(cards, sort), [cards, sort]);
 
+  const fetchCards = useCallback(
+    async (name: string, page: number, append: boolean) => {
+      if (page === 1) {
+        setLoading(true);
+      } else {
+        setLoadingMore(true);
+      }
+
+      try {
+        const nameParam = name ? `name=${encodeURIComponent(name)}&` : "";
+        const res = await fetch(
+          `/api/search?${nameParam}page=${page}&pageSize=100`
+        );
+        const data = await res.json();
+        const parsed = (data.data || []).map(parseCard);
+        const total = data.totalCount || 0;
+
+        // Ignore if search changed while loading
+        if (currentSearchRef.current !== name) return;
+
+        setTotalCount(total);
+        setCards((prev) => (append ? [...prev, ...parsed] : parsed));
+        setCurrentPage(page);
+        setHasMore(page * 100 < total);
+      } catch {
+        if (!append) setCards([]);
+      } finally {
+        setLoading(false);
+        setLoadingMore(false);
+      }
+    },
+    []
+  );
+
   async function handleSearch(name: string) {
-    setLoading(true);
+    currentSearchRef.current = name;
     setHasSearched(true);
-    setSearchedName(name);
-
-    try {
-      const res = await fetch(`/api/search?name=${encodeURIComponent(name)}`);
-      const data = await res.json();
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const parsed: PokemonCard[] = (data.data || []).map((card: any) => {
-        let priceVal = 0;
-        const pricesDetail: Record<string, Record<string, number>> = {};
-
-        if (card.tcgplayer?.prices) {
-          for (const [variant, priceData] of Object.entries(
-            card.tcgplayer.prices
-          )) {
-            pricesDetail[variant] = priceData as Record<string, number>;
-            const market = (priceData as Record<string, number>).market;
-            if (market && priceVal === 0) priceVal = market;
-          }
-        }
-
-        return {
-          name: card.name,
-          set: card.set?.name || "Unknown",
-          rarity: card.rarity || "Unknown",
-          price: priceVal,
-          imageSmall: card.images?.small || "",
-          imageLarge: card.images?.large || "",
-          artist: card.artist || "Unknown",
-          number: card.number || "?",
-          setTotal: card.set?.printedTotal?.toString() || "?",
-          setSeries: card.set?.series || "Unknown",
-          setRelease: card.set?.releaseDate || "Unknown",
-          types: (card.types || []).join(", ") || "N/A",
-          hp: card.hp || "N/A",
-          supertype: card.supertype || "Unknown",
-          subtypes: (card.subtypes || []).join(", ") || "N/A",
-          pricesDetail,
-          tcgplayerUrl: card.tcgplayer?.url || "",
-        };
-      });
-
-      setCards(parsed);
-    } catch {
-      setCards([]);
-    } finally {
-      setLoading(false);
-    }
+    setSearchedName(name || "All Cards");
+    setCards([]);
+    fetchCards(name, 1, false);
   }
+
+  // Infinite scroll observer
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasMore && !loading && !loadingMore) {
+          fetchCards(currentSearchRef.current, currentPage + 1, true);
+        }
+      },
+      { rootMargin: "400px" }
+    );
+
+    observer.observe(sentinel);
+    return () => observer.unobserve(sentinel);
+  }, [hasMore, loading, loadingMore, currentPage, fetchCards]);
 
   return (
     <main className="flex-1 flex flex-col">
@@ -149,20 +196,38 @@ export default function Home() {
             <h2 className="text-2xl font-bold text-white mb-2">
               Search for a Pokemon
             </h2>
-            <p className="text-gray-500 max-w-md">
+            <p className="text-gray-500 max-w-md mb-6">
               Type a Pokemon name to browse every card ever printed, with
               current market prices from TCGPlayer.
             </p>
+            <button
+              onClick={() => handleSearch("")}
+              className="px-6 py-3 rounded-xl bg-[#e63946] hover:bg-[#ff6b6b] text-white font-semibold transition cursor-pointer"
+            >
+              Browse All Cards
+            </button>
           </div>
         )}
 
         {hasSearched && !loading && (
           <div className="mb-4 flex items-center justify-between">
             <p className="text-sm text-gray-400">
-              Found{" "}
+              Showing{" "}
               <span className="text-white font-semibold">{cards.length}</span>{" "}
-              cards for{" "}
-              <span className="text-white font-semibold">&ldquo;{searchedName}&rdquo;</span>
+              of{" "}
+              <span className="text-white font-semibold">
+                {totalCount.toLocaleString()}
+              </span>{" "}
+              cards
+              {searchedName !== "All Cards" && (
+                <>
+                  {" "}
+                  for{" "}
+                  <span className="text-white font-semibold">
+                    &ldquo;{searchedName}&rdquo;
+                  </span>
+                </>
+              )}
             </p>
           </div>
         )}
@@ -184,6 +249,16 @@ export default function Home() {
 
         {!loading && sortedCards.length > 0 && (
           <CardGrid cards={sortedCards} />
+        )}
+
+        {/* Infinite scroll sentinel */}
+        <div ref={sentinelRef} className="h-1" />
+
+        {loadingMore && (
+          <div className="flex items-center justify-center py-8">
+            <div className="w-8 h-8 border-3 border-white/20 border-t-[#e63946] rounded-full animate-spin mr-3" />
+            <p className="text-gray-500">Loading more cards...</p>
+          </div>
         )}
       </div>
     </main>

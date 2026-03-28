@@ -62,7 +62,7 @@ export default function SearchBar({ onSearch, loading }: SearchBarProps) {
     } else if (e.key === "Enter") {
       if (selectedIndex >= 0 && suggestions[selectedIndex]) {
         handleSelect(suggestions[selectedIndex]);
-      } else if (query.trim()) {
+      } else {
         setShowSuggestions(false);
         onSearch(query.trim());
       }
@@ -94,12 +94,10 @@ export default function SearchBar({ onSearch, loading }: SearchBarProps) {
         </div>
         <button
           onClick={() => {
-            if (query.trim()) {
-              setShowSuggestions(false);
-              onSearch(query.trim());
-            }
+            setShowSuggestions(false);
+            onSearch(query.trim());
           }}
-          disabled={loading || !query.trim()}
+          disabled={loading}
           className="px-6 py-3 rounded-xl bg-[#e63946] hover:bg-[#ff6b6b] disabled:opacity-50 disabled:hover:bg-[#e63946] text-white font-semibold transition cursor-pointer"
         >
           Search
