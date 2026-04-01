@@ -1,4 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
+import { readFileSync, existsSync } from "fs";
+import { join } from "path";
+
+// Load price cache once for filling in missing prices from the API
+let priceMap: Map<string, { price: number; prices: Record<string, Record<string, number>> }> | null = null;
+
+function getPriceMap() {
+  if (priceMap) return priceMap;
+  const filePath = join(process.cwd(), "data", "cards-by-price.json");
+  if (!existsSync(filePath)) return new Map();
+  const cards = JSON.parse(readFileSync(filePath, "utf-8"));
+  priceMap = new Map();
+  for (const c of cards) {
+    if (c.price > 0) {
+      priceMap.set(c.id, { price: c.price, prices: c.prices });
+    }
+  }
+  return priceMap;
+}
 
 const ORDER_MAP: Record<string, string> = {
   "release-new": "-set.releaseDate",
@@ -41,9 +60,24 @@ export async function GET(request: NextRequest) {
 
   const orderBy = ORDER_MAP[sort] || "-set.releaseDate";
   const queryStr = queryParts.length > 0 ? `q=${encodeURIComponent(queryParts.join(" "))}&` : "";
-  const url = `https://api.pokemontcg.io/v2/cards?${queryStr}orderBy=${orderBy}&page=${page}&pageSize=${pageSize}`;
+  const select = "id,name,set,rarity,images,tcgplayer,hp,supertype,subtypes,types,artist,number";
+  const url = `https://api.pokemontcg.io/v2/cards?${queryStr}orderBy=${orderBy}&page=${page}&pageSize=${pageSize}&select=${encodeURIComponent(select)}`;
   const res = await fetch(url);
   const data = await res.json();
+
+  // Merge cached prices into cards missing them from the API
+  if (data.data?.length) {
+    const cache = getPriceMap();
+    for (const card of data.data) {
+      if (!card.tcgplayer?.prices && cache.has(card.id)) {
+        const cached = cache.get(card.id)!;
+        card.tcgplayer = {
+          ...card.tcgplayer,
+          prices: cached.prices,
+        };
+      }
+    }
+  }
 
   return NextResponse.json(data);
 }

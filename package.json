@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "prebuild": "node scripts/build-price-cache.mjs",
+    "check-cache-sets": "node scripts/check-cache-sets.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"

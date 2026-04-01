@@ -34,7 +34,8 @@ yarn-error.log*
 .env*
 
 # price cache (generated at build time)
-/data/
+/data/*
+!/data/product-map.json
 
 # vercel
 .vercel
